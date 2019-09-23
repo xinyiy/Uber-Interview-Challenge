@@ -1,0 +1,1607 @@
+---
+title: "Data Visualization for Uber Interview Challenge"
+author: "Xinyi Ye"
+date: "2019/7/25"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: 4
+  bookdown::pdf_document2:
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+---
+
+\listoffigures
+
+\listoftables
+
+# Import Libraries & Datasets
+
+```{r}
+library(wordcloud) # Word Cloud
+library(rpart) # Decision Tree
+library(caret) # Feature Selection
+library(rpart.plot) # Plotting Decision Tree
+library(pROC) # ROC curve and AUC
+library(randomForest) # Random Forest
+library(nnet) # Neural Network
+library(corrplot) # For correlation plor
+library(oddsratio) # For odds-probability conversion
+library(knitr) # For knitting tables
+library(kableExtra) # For knitting tables
+library(dplyr) 
+library(devtools) # For neural network plots
+library(reshape)
+library(devtools)
+library(plyr)
+library(NeuralNetTools) # Neural Network Plots
+source_url('https://gist.githubusercontent.com/fawda123/7471137/raw/466c1474d0a505ff044412703516c34f1a4684a5/nnet_plot_update.r')
+
+```
+
+```{r}
+urlRemote  <- "/Users/yxy/Dropbox/Xinyi Ye/Business Analytics Case Study/"
+pathGithub <- "2_4_Uber Interview Challenge/Dataset/"
+fileName   <- "ds_challenge_v2_1_data.csv"
+uber <- read.csv(paste0(urlRemote, pathGithub, fileName))
+```
+
+# Data Description
+
+This dataset has 54681 records of Uber drivers who signed up during 1/1/2016 through 1/31/2016. It includes data fields related to the driver's signup date, location, vehicle information and first trip date. The process a new driver may complete starts with signup, through background check, vehicle registration, adding vehicle information, to finishing the first trip. 
+
+The background check and vehicle registration are optional after signup, hence there are 21875 missing records of background check date and 41547 missing records of vehicle registration. The period for background check is from 1/1/2016 to 3/25/2016, and the period for vehicle registration is from 1/1/2016 to 1/1/3/26. There are only 13223 records (41458 missing records) of vehicle information (make, model, year) since some drivers might not have finished the registration process. Moreover, only 6137 drivers finished their first trip from 1/4/2016 to 2/29/2016.
+
+```{r}
+# Change the time to the appropriate format for summary.
+uber$signup_date <- as.Date(format(as.Date(uber$signup_date, 
+                                           format="%m/%d/%Y"), "20%y/%m/%d"))
+uber$bgc_date <- as.Date(format(as.Date(uber$bgc_date, 
+                                        format="%m/%d/%Y"), "20%y/%m/%d"))
+uber$vehicle_added_date <- as.Date(format(as.Date(uber$vehicle_added_date, 
+                                                  format="%m/%d/%Y"), "20%y/%m/%d"))
+uber$first_completed_date <- as.Date(format(as.Date(uber$first_completed_date, 
+                                                    format="%m/%d/%Y"), "20%y/%m/%d"))
+summary(uber)
+```
+
+There are in a total of 11 variables, 5 categorical and 6 numeric. 
+
+```{r}
+length(unique(uber$id))
+```
+
+Every id is unique.
+
+# Pre-Analysis
+
+This section consists of the pre-analyses of 3 parts: Driver Registration, Vehicle Registration/Information and First Trip Completion.
+
+```{r}
+# Drivers who NEVER completed their first ride 
+uber.not.comp <- uber[which(is.na(uber$first_completed_date)), ]
+# Drivers who completed their first ride
+uber.comp <- uber[which(!is.na(uber$first_completed_date)), ]  
+uber$complete <- 0
+uber$complete[which(!is.na(uber$first_completed_date))] <- 1 
+```
+
+```{r Create uber_v subset}
+#  Create a subset with drivers only with registered vehicle
+uber_v <- uber[which(!is.na(uber$vehicle_added_date)), ]
+uber_v <- uber[which(uber_v$vehicle_year != 0), ]
+#summary(uber_v)
+```
+
+```{r}
+# Create subsets by whether a driver with rigistered vehicle completed the first trip or not
+uber_v.not.comp <- uber_v[which(is.na(uber_v$first_completed_date)), ]
+uber_v.comp <- uber_v[which(!is.na(uber_v$first_completed_date)), ]
+uber_v$complete <- 0
+uber_v$complete[which(!is.na(uber_v$first_completed_date))] <- 1 
+```
+
+## Driver Registration
+
+### Signup Source
+
+#### What is the most popular signup source?
+
+```{r fig.pie.source, echo=FALSE,fig.cap="\\label{fig:fig.pie.source}Distribution of Signup Sources", fig.align="center", fig.pos="h"}
+slices.source <- data.frame(table(uber$signup_os))[,2] 
+lbls.source <- c("Unknown", "Android", "IOS", "Mac", "Other", "Windows")
+pct.source <- round(slices.source/sum(slices.source)*100)
+lbls.source <- paste(lbls.source, pct.source) # add percents to labels 
+lbls.source <- paste(lbls.source,"%",sep="") # ad % to labels 
+#pie(slices,labels = lbls, col=rainbow(length(lbls)),
+#   main="Drivers' Signup Source ")
+pie(slices.source,labels = lbls.source)
+```
+
+**[Interpretation]** 
+
+Figure \ref{fig:fig.pie.source} shows that the two mobile sources - IOS and Andriod take up 30% and 27%, respectively. In a total, they account for 57% of the signups. As for PC source, Windows and Mac take up 12% and 11%, respectively. The total percentege of unknown and other sources are 20%. 
+
+**[Implication]** 
+
+The drivers are most likely to sign up through mobile devices. The reason might be that Uber app is run on cell phones, so users tend to sign up with mobile devices. Nearly 1/4 of users chose to sign up trough websites on PC, which also makes up an important component of the signup source.
+
+### Signup Channel
+
+#### What is the most common signup channel?
+
+```{r  fig.pie.channel, echo=FALSE,fig.cap="\\label{fig:fig.pie.channel}Distribution of Signup Channels", fig.align="center", fig.pos="h"}
+slices.channel <- data.frame(table(uber$signup_channel))[,2] 
+lbls.channel <- c("Organic", "Paid", "Referral")
+pct.channel <- round(slices.channel/sum(slices.channel)*100)
+lbls.channel <- paste(lbls.channel, pct.channel) # add percents to labels 
+lbls.channel <- paste(lbls.channel, "%", sep="") # add % to labels 
+lbls.channel <- paste(lbls.channel, "\n", table(uber$signup_channel), sep="")
+pie(slices.channel,labels = lbls.channel)
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.pie.channel} shows that 44% drivers are paid, 32% are through referral and only 25% are organic. 
+
+**[Implication]**
+
+The organic channel is the least effective way when it comes to attracting new drivers. Most drivers signed up either through referrals or were simply paid. In both way, they can get rewards. Signup bonus is very important for new drivers.
+
+
+### City
+
+#### Which city are the drivers from?
+
+```{r fig.pie.city, echo=FALSE,fig.cap="\\label{fig:fig.pie.city}Distribution of Location", fig.align="center", fig.pos="h"}
+slices.city <- data.frame(table(uber$city_name))[,2] 
+lbls.city <- c("Berton", "Strark", "Wrouver")
+pct.city <- round(slices.city/sum(slices.city)*100)
+lbls.city <- paste(lbls.city, pct.city) # add percents to labels 
+lbls.city <- paste(lbls.city, "%", sep="") # add % to labels 
+lbls.city <- paste(lbls.city, "\n", table(uber$signup_city), sep="")
+pie(slices.city,labels = lbls.city)
+```
+
+**[Interpretation]** 
+
+Figure \ref{fig:fig.pie.city} shows that 54% of the drivers are from Strark, 37% are from Berton and only 9% are from Wrouver. 
+
+**[Implication]**
+
+More information about the cities is needed.
+
+### Summary
+
+The most popular signup source/device is mobile devices including IOS and Andriod, which takes up 57% of the whole signup number. Then second popular source is websites from Mac or Windows, which takes up to 23%. 44% of new drivers signed up through paid promotion channel, 32% though referral, 25% though organic. Half of the drivers come from Strark, 37% from Berton and 9% from Wrouver.
+
+## Vehicle Registration/Information
+
+### Vehicle Condition
+
+#### How old are the cars?
+
+```{r fig.hist.year, echo=FALSE,fig.cap="\\label{fig:fig.hist.make}Distribution of Age of Vehicles", fig.align="center", fig.pos="h"}
+hist(uber_v$vehicle_year, breaks = length(unique(uber_v$vehicle_year))-1, 
+     main = "", xlab = "Year", ylab = "Number of Newly Registered Vehicles")
+abline(v = 2004, col = "red")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.hist.year} shows that most vehicles are made between 2011 and 2016.The oldest vehicles are over 15 years old while the newest are made in 2016. The histogram above is heavily skewed to the right side, which indicates that the mojority of vehicles are new.
+
+**[Implication]**
+
+In terms of years of a vehicle, the condition of most vehicles is satisfying. 
+
+```{r binning by car years}
+# Add new features: complete, new
+# 4: new
+# 3: semi-new
+# 2: semi-old
+# 1: old
+# 0: not acceptable
+uber_v$new[which(!is.na(uber_v$vehicle_year))] <- "0" # do not meet Uber's requirements
+uber_v$new[which(uber_v$vehicle_year >= 2004 & 
+                   uber_v$vehicle_year <= 2007)] <- "1" # 10-13 years
+uber_v$new[which(uber_v$vehicle_year > 2007 & 
+                   uber_v$vehicle_year <= 2010)] <- "2" # 7-9 years
+uber_v$new[which(uber_v$vehicle_year > 2010 & 
+                   uber_v$vehicle_year <= 2013)] <- "3" # 4-6 years
+uber_v$new[which(uber_v$vehicle_year > 2013)] <- "4" # 0-3 years
+table(uber_v$new)
+
+uber_v.comp$new[which(!is.na(uber_v.comp$vehicle_year))] <- "0" # do not meet Uber's requirements
+uber_v.comp$new[which(uber_v.comp$vehicle_year >= 2004 & 
+                   uber_v.comp$vehicle_year <= 2007)] <- "1" # 10-13 years
+uber_v.comp$new[which(uber_v.comp$vehicle_year > 2007 & 
+                   uber_v.comp$vehicle_year <= 2010)] <- "2" # 7-9 years
+uber_v.comp$new[which(uber_v.comp$vehicle_year > 2010 & 
+                   uber_v.comp$vehicle_year <= 2013)] <- "3" # 4-6 years
+uber_v.comp$new[which(uber_v.comp$vehicle_year >2013)] <- "4" # 0-3 years
+table(uber_v.comp$new)
+
+uber_v.not.comp$new[which(!is.na(uber_v.not.comp$vehicle_year))] <- "0" # do not meet Uber's requirements
+uber_v.not.comp$new[which(uber_v.not.comp$vehicle_year >= 2004 & 
+                   uber_v.not.comp$vehicle_year <= 2007)] <- "1" # 10-13 years
+uber_v.not.comp$new[which(uber_v.not.comp$vehicle_year > 2007 & 
+                   uber_v.not.comp$vehicle_year <= 2010)] <- "2" # 7-9 years
+uber_v.not.comp$new[which(uber_v.not.comp$vehicle_year > 2010 & 
+                   uber_v.not.comp$vehicle_year <= 2013)] <- "3" # 4-6 years
+uber_v.not.comp$new[which(uber_v.not.comp$vehicle_year >2013)] <- "4" # 0-3 years
+table(uber_v.not.comp$new)
+
+uber$new <- NA
+uber$new[which(!is.na(uber$vehicle_year))] <- "0" # do not meet Uber's requirements
+uber$new[which(uber$vehicle_year >= 2004 & 
+                   uber$vehicle_year <= 2007)] <- "1" # 10-13 years
+uber$new[which(uber$vehicle_year > 2007 & 
+                   uber$vehicle_year <= 2010)] <- "2" # 7-9 years
+uber$new[which(uber$vehicle_year > 2010 & 
+                   uber$vehicle_year <= 2013)] <- "3" # 4-6 years
+uber$new[which(uber$vehicle_year >2013)] <- "4" # 0-3 years
+table(uber$new)
+```
+
+```{r fig.pie.new, echo=FALSE,fig.cap="\\label{fig:fig.pie.new}Distribution of Car Conditions", fig.align="center", fig.pos="h"}
+slices.new <- data.frame(table(uber_v$new))[,2] 
+lbls.new <- c("Not Acceptable", "Old", "Semi-Old New", "Semi-New", "New")
+pct.new <- round(slices.new/sum(slices.new)*100)
+lbls.new <- paste(lbls.new, pct.new) # add percents to labels 
+lbls.new <- paste(lbls.new, "%", sep="") # add % to labels 
+lbls.new <- paste(lbls.new, "\n", table(uber_v$new), sep="")
+pie(slices.new,labels = lbls.new)
+```
+
+**[Interpretation]**
+
+The cars are binned into 5 categories according to the years. 0-3 years are new, 4-6 years are semi-new, 7-9 years are semi-old, 10-13 years are old, and since using vehicles over 13 years for Uber would break the law in most states [^1], they are considered unacceptable. Figure \ref{fig:fig.pie.new} shows that 40% of the vehicles are new, 26% are semi-new, 14% are semi-old and 15% are old. However, there are still 17% unacceptable vehicles registered.
+
+[^1]: https://rideshareapps.com/uber-vehicle-requirements-for-2019/
+
+**[Implication]**
+
+66% of vehicles can be considered as in good condition, which is good news to passengers. However, the life expectancy or longevity of a Uber vehicle should be shorter than family cars considering the frequent usage. Therefore, for the vehicles over 6 years, which take up to 34% of the total number, Uber should provide more careful inspection. And the 7% of cars over 13 years should not even be added to the platform.
+
+### Vehicle Makes & Models
+
+#### Which makes are most popular among drivers?
+
+```{r fig.wc.make, echo=FALSE,fig.cap="\\label{fig:fig.wc.make}Wordcloud of Vehicle Makes", fig.align="center", fig.pos="h"}
+wordcloud(data.frame(table(uber_v$vehicle_make))[,1], 
+          data.frame(table(uber_v$vehicle_make))[,2], scale=c(30,.8), colors=rainbow(length(data.frame(table(uber_v$vehicle_make))[,1])),
+          ordered.colors=TRUE)
+
+sort(table(uber_v$vehicle_make), decreasing = TRUE)[2:11]
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.wc.make} shows that the three top 10 brands are Toyota, Honda, Nissan, Ford, Hyundai, Chevrolet, Kia, Volkswagen, Lexus, BMW.
+
+**[Implication]**
+
+Interestingly, the 3 most popular makes are all from Japan, which are famous for economy cars. Lexus and BMW are the only 2 non-economy car makes.
+
+#### Which models are most popular among drivers?
+
+```{r fig.wc.model, echo=FALSE,fig.cap="\\label{fig:fig.wc.model}Wordcloud of Vehicle Models", fig.align="center", fig.pos="h"}
+wordcloud(data.frame(table(uber_v$vehicle_model))[,1], 
+          data.frame(table(uber_v$vehicle_model))[,2], scale=c(30,.8), colors=rainbow(length(data.frame(table(uber_v$vehicle_model))[,1])),
+          ordered.colors=TRUE,
+          max.words = 50)
+
+sort(table(uber_v$vehicle_model), decreasing = TRUE)[2:11]
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.wc.model} shows that the 10 most popular car models are Camry, Civic, Corolla, Accord, Prius V, Altima, Prius, Sentra, Fusion, Elantra.
+
+**[Implication]**
+
+These cars are not only popular in Uber, but also among college students and can be seen everywhere, which indicates that cost-effectiveness and practicality are very essential for present and future Uber drivers.
+
+### Summary
+
+Most cars are less than 6 years old. In terms of years, 40% vehicles can be considered as new, and 26% are semi-new. There are still 7% that are made before 2004, hence these vehicles should not be approved during registration. As to car makes and models, Japanese brands are really popular. The top 3 brands are all from Japan, which are Toyota, Honda and Nissan, which are all famous for economy and compact models. The top three models are Camry, Civic and Corolla, which are all economy cars.
+
+## First Trip Completion
+
+### Drivers
+
+#### Drivers from which signup sources are most likely to finish their first ride? 
+
+```{r fig.bar.source, fig.align="center", echo=FALSE,fig.cap="\\label{fig:fig.bar.source}First Trip Compeletion Rate vs. Signup Source", fig.align="center", fig.pos="h"}
+colors <- c("cadetblue2", "lightpink")
+regions <- c("Completed", "NOT Completed")
+H.source <- matrix(c(length(uber.comp$signup_os[uber.comp$signup_os == "ios web"]), 
+              length(uber.comp$signup_os[uber.comp$signup_os == "android web"]), 
+              length(uber.comp$signup_os[uber.comp$signup_os == "windows"]), 
+              length(uber.comp$signup_os[uber.comp$signup_os == "mac"]),
+              length(uber.comp$signup_os[uber.comp$signup_os == "other"]),
+              length(uber.comp$signup_os[uber.comp$signup_os == ""]),
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == "ios web"]),
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == "android web"]), 
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == "windows"]),
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == "mac"]),
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == "other"]), 
+              length(uber.not.comp$signup_os[uber.not.comp$signup_os == ""])), 
+            nrow=2,ncol=6,byrow=TRUE)
+bar.source <- barplot(H.source, xlab = "Signup Source", col = colors, 
+        names.arg=c("IOS", "Android", "Windows", "Mac", "Other", "Unknown"),
+        ylim=c(0, 20000))
+
+l.source <- c(sum(uber.comp$signup_os == "ios web")/
+                sum(uber$signup_os == "ios web"), 
+              sum(uber.comp$signup_os == "android web")/
+                sum(uber$signup_os == "android web"), 
+              sum(uber.comp$signup_os == "windows")/
+                sum(uber$signup_os == "windows"), 
+              sum(uber.comp$signup_os == "mac")/
+                sum(uber$signup_os == "mac"), 
+              sum(uber.comp$signup_os == "other")/
+                sum(uber$signup_os == "other"), 
+              sum(uber.comp$signup_os == "")/
+                sum(uber$signup_os == ""))
+
+text(bar.source, 
+     l.source*data.frame(sort(table(uber$signup_os), decreasing = TRUE))[,2]+1000,
+     paste(round(l.source, 2)*100, "%", sep=""), cex=1) 
+legend("topright", regions, cex = 1.3, fill = colors)
+```
+
+**[Interpretation]** 
+
+Figure \ref{fig:fig.bar.source} shows that the completion rate is the highest at PC sources. That of Mac users is 16%, and of Windows users is 13%. For mobile sources, the conversion rates are slightly lower, which is 12% for Andriod users, and 13% for IOS users. Drivers signed up from other sources also have a relatively high conversion rate of 14%.
+
+**[Implication]** 
+
+Even though the completion rate of mobile signup drivers are slightly lower than that of PC signup drivers, the difference in actual numbers can be big. Since IOS and Andriod take up 57% of the total users, the number of drivers who completed the first trip from these two sources is way larger than that of drivers signed up from PC. 
+
+The possible reason for the slightly higher completion rate for PC uses is that they signed up instantly when they finished researching about Uber with PC. Therefore, there is a great possibility to transfer users with this potential to sign up on mobile devices.
+
+#### Drivers from which signup channels are most likely to finish their first ride? 
+
+```{r fig.bar.channel, echo=FALSE,fig.cap="\\label{fig:fig.bar.channel}First Trip Compeletion Rate vs. Signup Channel", fig.align="center", fig.pos="h"}
+colors <- c("cadetblue2", "lightpink")
+regions <- c("Completed", "NOT Completed")
+H.channel <- matrix(c(length(uber.comp$signup_channel[uber.comp$signup_channel == "Paid"]), 
+              length(uber.comp$signup_channel[uber.comp$signup_channel == "Referral"]), 
+              length(uber.comp$signup_channel[uber.comp$signup_channel == "Organic"]), 
+              length(uber.not.comp$signup_channel[uber.not.comp$signup_channel == "Paid"]), 
+              length(uber.not.comp$signup_channel[uber.not.comp$signup_channel == "Referral"]), 
+              length(uber.not.comp$signup_channel[uber.not.comp$signup_channel == "Organic"])), 
+            nrow=2,ncol=3,byrow=TRUE)
+bar.channel <- barplot(H.channel, xlab = "Signup Channel", col = colors, 
+        names.arg=c( "Paid", "Referral", "Organic"),
+        ylim = c(0, max(aggregate(complete ~ signup_channel, data = uber, length)[,2])+2000))
+
+l.channel <- c(sum(uber.comp$signup_channel == "Paid")/
+                sum(uber$signup_channel == "Paid"), 
+              sum(uber.comp$signup_channel == "Referral")/
+                sum(uber$signup_channel == "Referral"), 
+              sum(uber.comp$signup_channel == "Organic")/
+                sum(uber$signup_channel == "Organic"))
+
+text(bar.channel, 
+     l.channel*data.frame(sort(table(uber$signup_channel), decreasing = TRUE))[,2]+1000,
+     paste(round(l.channel, 2)*100, "%", sep=""), cex=1) 
+legend("topright", regions, cex = 1, fill = colors)
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.bar.channel} shows that 9% percent of organic drivers , 6% of paid drivers and 20% of refered drivers finished their first trip.  
+
+**[Implication]**
+
+Drivers signed up through referrals has the highest value in both population and percentage of drivers who completed their first trip. In contrast, paid drivers has the highest number of signup but lowest number of first trip completion. Since signup bonus is important, the complany may want to invest more on referral bonus rather than paid promotions.
+
+#### Drivers from which city have the highest first drive completion rate?
+
+```{r fig.bar.city, echo=FALSE,fig.cap="\\label{fig:fig.bar.city}First Trip Completion Rate vs. Driver's Location", fig.align="center", fig.pos="h"}
+colors <- c("cadetblue2", "lightpink")
+regions <- c("Completed", "NOT Completed")
+H.city <- matrix(c(length(uber.comp$city_name[uber.comp$city_name == "Strark"]), 
+              length(uber.comp$city_name[uber.comp$city_name == "Berton"]), 
+              length(uber.comp$city_name[uber.comp$city_name == "Wrouver"]), 
+              length(uber.not.comp$city_name[uber.not.comp$city_name == "Strark"]), 
+              length(uber.not.comp$city_name[uber.not.comp$city_name == "Berton"]), 
+              length(uber.not.comp$city_name[uber.not.comp$city_name == "Wrouver"])), 
+            nrow=2,ncol=3,byrow=TRUE)
+bar.city <- barplot(H.city, xlab = "City", col = colors, 
+        names.arg=c("Berton", "Strark", "Wrouver"),
+        ylim = c(0, max(aggregate(complete ~ city_name, data = uber, length)[,2])+2000))
+
+l.city <- c(sum(uber.comp$city_name == "Strark")/
+                sum(uber$city_name == "Strark"), 
+              sum(uber.comp$city_name == "Berton")/
+                sum(uber$city_name == "Berton"), 
+              sum(uber.comp$city_name == "Wrouver")/
+                sum(uber$city_name == "Wrouver"))
+
+text(bar.city, 
+     l.city*data.frame(sort(table(uber$city_name), decreasing = TRUE))[,2]+1000,
+     paste(round(l.city, 2)*100, "%", sep=""), cex=1) 
+legend("topright", regions, cex = 1, fill = colors)
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.bar.city} shows that Berton drivers have a completion rate of 12%, and Strark users have 11%, Wrouver drivers have 9%.
+
+**[Implication]**
+
+The completion rates for 3 cities are very close. Therefore, location may not play an important role when determine the completion rate.
+
+### Vehicles
+
+#### Drivers with which vehicle conditions are most likely to finish the first trip?
+
+```{r fig.bar.new, echo=FALSE, fig.cap="\\label{fig:fig.bar.new}First Trip Completion Rate vs. Vehicle Condition", fig.align="center", fig.pos="h"}
+colors <- c("black", "gray")
+regions <- c("Completed", "NOT Completed")
+
+df.comp.new <- data.frame(table(uber_v.comp$new))
+df.not.comp.new <- data.frame(table(uber_v.not.comp$new))
+
+H.new <- matrix(c(df.comp.new[5,2],
+                  df.comp.new[4,2],
+                  df.comp.new[2,2],
+                  df.comp.new[3,2],
+                  df.comp.new[1,2],
+                  df.not.comp.new[5,2],
+                  df.not.comp.new[4,2],
+                  df.not.comp.new[2,2],
+                  df.not.comp.new[3,2],
+                  df.not.comp.new[1,2]), 
+            nrow=2,ncol=5,byrow=TRUE)
+bar.new <- barplot(H.new, xlab = "Condition", 
+        names.arg=c("New", "Semi-New", "Old", "Semi-Old", "Not Acceptable"),
+        cex.names=0.8,
+        ylim = c(0, max(aggregate(complete ~ new, data = uber_v, length)[,2])+200))
+
+l.new <- c(df.comp.new[5,2]/(df.comp.new[5,2]+df.not.comp.new[5,2]),
+           df.comp.new[4,2]/(df.comp.new[4,2]+df.not.comp.new[4,2]),
+           df.comp.new[2,2]/(df.comp.new[2,2]+df.not.comp.new[2,2]),
+           df.comp.new[3,2]/(df.comp.new[3,2]+df.not.comp.new[3,2]),
+           df.comp.new[1,2]/(df.comp.new[1,2]+df.not.comp.new[1,2]))
+
+text(bar.new, 
+     data.frame(sort(table(uber_v.comp$new), decreasing = TRUE))[,2]+80,
+     paste(round(l.new, 2)*100, "%", sep=""), cex=1) 
+
+legend("topright", regions, cex = 1, fill = colors)
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.bar.new} shows that except unacceptable cars, the completion rates are very close. Among them, the newest have 47%, the semi-new have 46%, the semi-old have 45%, the oldest have 43%. The completion rate for unacceptable vehicles are 36%.
+
+**[Implication]**
+
+Suprisingly, this figure tells us that once the information of vehicle was complete, there are almost half the chance that the driver would complete their first trip. The reason may be that this group of drivers might be more determined to take a chance in Uber. But those unacceptable vehicles should not have a 36% completion rate.
+
+#### Drivers with which kind of car are most likely to finish their first trip?
+
+```{r binning cars by price}
+# Reference: https://www.quora.com/At-what-price-ranges-is-a-
+#            car-considered-an-entry-level-mid-tier-and-luxury
+# Price reference: https://www.truecar.com/prices-new/
+# Price reference: https://www.autoblog.com/
+# C: Entry, around $12000.
+# B: Mid level, low $20’s to mid $30’s, possibly lower with incentives.
+# A: Near luxury, low $40s to mid $50s.
+# S: Luxury, high 40’s to infinity.
+uber_v$tier[which(!is.na(uber_v$vehicle_make))] <- "C"
+list_S <- c("Porsche", "Tesla", "Maserati", "Bentley")
+list_A <- c("Cadillac", "Mercedes-Benz", "Infiniti", "Lexus", "Audi", "BMW", "Volvo", 
+            "Lincoln", "Land Rover", "Jaguar")
+list_B <- c("Dodge", "Acura", "GMC", "Jeep", "Subaru", "Buick", "Mazda", "Chrysler", 
+            "Hummer", "Mercury", "Mini", "Saab")
+uber_v$tier[uber_v$vehicle_make %in% list_B] <- "B"
+uber_v$tier[uber_v$vehicle_make %in% list_A] <- "A"
+uber_v$tier[uber_v$vehicle_make %in% list_S] <- "S"
+table(uber_v$tier)
+
+uber_v.comp$tier[which(!is.na(uber_v.comp$vehicle_make))] <- "C"
+uber_v.comp$tier[uber_v.comp$vehicle_make %in% list_B] <- "B"
+uber_v.comp$tier[uber_v.comp$vehicle_make %in% list_A] <- "A"
+uber_v.comp$tier[uber_v.comp$vehicle_make %in% list_S] <- "S"
+table(uber_v.comp$tier)
+
+uber_v.not.comp$tier[which(!is.na(uber_v.not.comp$vehicle_make))] <- "C"
+uber_v.not.comp$tier[uber_v.not.comp$vehicle_make %in% list_B] <- "B"
+uber_v.not.comp$tier[uber_v.not.comp$vehicle_make %in% list_A] <- "A"
+uber_v.not.comp$tier[uber_v.not.comp$vehicle_make %in% list_S] <- "S"
+table(uber_v.not.comp$tier)
+
+uber$tier[which(!is.na(uber$vehicle_make))] <- "C"
+uber$tier[uber$vehicle_make %in% list_B] <- "B"
+uber$tier[uber$vehicle_make %in% list_A] <- "A"
+uber$tier[uber$vehicle_make %in% list_S] <- "S"
+table(uber$tier)
+```
+
+
+```{r fig.bar.tier, echo=FALSE,fig.cap="\\label{fig:fig.car.tier}First Trip Completion Rate vs. Car Maker Tiers", fig.align="center", fig.pos="h"}
+colors <- c("black", "gray")
+regions <- c("Completed", "NOT Completed")
+
+df.comp.tier <- data.frame(table(uber_v.comp$tier))
+df.not.comp.tier <- data.frame(table(uber_v.not.comp$tier))
+
+H.tier <- matrix(c(length(uber_v.comp$tier[uber_v.comp$tier == "C"]), 
+              length(uber_v.comp$tier[uber_v.comp$tier == "A"]), 
+              length(uber_v.comp$tier[uber_v.comp$tier == "B"]), 
+              length(uber_v.comp$tier[uber_v.comp$tier == "S"]), 
+              length(uber_v.not.comp$tier[uber_v.not.comp$tier == "C"]), 
+              length(uber_v.not.comp$tier[uber_v.not.comp$tier == "A"]),
+              length(uber_v.not.comp$tier[uber_v.not.comp$tier == "B"]),
+              length(uber_v.not.comp$tier[uber_v.not.comp$tier == "S"])), 
+            nrow=2,ncol=4,byrow=TRUE)
+bar.tier <- barplot(H.tier, xlab = "Car Brand Tier",
+        names.arg=c("C", "A", "B", "S"),
+        ylim = c(0, max(aggregate(complete ~ tier, data = uber_v, length)[,2])+2000))
+
+l.tier <- c(df.comp.tier[3,2]/(df.comp.tier[3,2]+df.not.comp.tier[3,2]),
+           df.comp.tier[1,2]/(df.comp.tier[1,2]+df.not.comp.tier[1,2]),
+           df.comp.tier[2,2]/(df.comp.tier[2,2]+df.not.comp.tier[2,2]),
+           df.comp.tier[4,2]/(df.comp.tier[4,2]+df.not.comp.tier[4,2]))
+
+text(bar.tier, 
+     data.frame(sort(table(uber_v.comp$tier), decreasing = TRUE))[,2]+1000,
+     paste(round(l.tier, 2)*100, "%", sep=""), cex=1)
+legend("topright", regions, cex = 1, fill = colors)
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.bar.tier} shows that the completion rate of Tier A and B cars are both 44%, for S the number is 33%, while for C the number is 10%.
+
+**[Implication]**
+
+Even though the completion rate of Tier C drivers is the lowest, and way lower that those of other tiers, it still has the highest actual number because most vehicles belong to this tier. It is worth trying to increase the completion rate with Tier C drivers. 
+
+### Trend and Intervals Between Events
+
+#### Trend of Daily Signup Drivers and Completion Rate
+
+```{r fig.line.signup.number, echo=FALSE,fig.cap="\\label{fig:fig.line.signup.number}Number of Signup Drivers vs. Time", fig.align="center", fig.pos="h"}
+plot(table(uber_v$signup_date), type = "l", xlab = "Date", ylab = "Number of Drivers")
+points(table(uber_v.comp$signup_date), col = "red", type = "l")
+points(table(uber_v.not.comp$signup_date), col = "blue", type = "l")
+legend("topright", c("All", "Completed", "NOT Completed"), cex = 0.75, 
+       fill = c("black", "red", "blue"))
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.line.signup.number} shows that he number of signup users fluctuate thourgh the whole month from 300 to 600 with an average of 437 new users everyday.
+
+
+**[Implication]**
+
+Suprisingly, no matter how the numbers of the signup change, the numbers of drivers who finished the first trip do not vary much and are stable around 60 each day.
+
+#### Intervals Between Signup And First Trip Completion
+
+```{r fig.hist.interval, echo=FALSE,fig.cap="\\label{fig:fig.hist.interval}Number of Drivers vs. Intervals Between Signup And First Trip Completion", fig.align="center", fig.pos="h"}
+uber_v.comp$time.diff <- uber_v.comp$first_completed_date - uber_v.comp$signup_date
+plot(table(uber_v.comp$time.diff), xlab = "Interval", ylab= "Number of Drivers")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.hist.interval} shows that intervals between signup and first trip for most users are between 2-7 days. The longest interval can be up to 30 days.
+
+**[Implication]**
+
+Most drivers finished their first trip within a week of signing up.
+
+### Summary
+
+The completion rates of all signup source excepte unknown are between 10%-16%, which are close. The interesting part comes from the completion rate of each signup channel: even though most customers signed up though paid promotions, it has the lowest completion rate of only 6%; on the contrary, 32% drivers signed up thourgh referral channel, 20% of them finished their first trips. In terms of car conditions, the completion rate are between 43%-47% except unacceptable cars. Vehicles from brand tier A and B, which are determined by the average price of models of the brand, have the highest completion rate of 44%. Tier C drivers has the highest actual number of complete trips, but the completion rate is only 10%.
+
+Also, the daily completion number is about 60 throughout the whole signup period (the whole Janurary). Most drivers would finish their first trip within a week if they had decided to do so.
+
+## Pre-Analysis Summary
+
+According to the pre-analysis section, the most popular signup source is mobile devices (IOS and Andriod) with a total percentage of 57%, while the second most popular source, PC, only takes up 23%. The first trip completion rate is similar among those sources, between 10% to 16%. The most popular signup channel is paid promotions, which accounts for 44%. In comparison, organic and referral channels have slightly lower percentages, which are 25% and 32%, respectively. However, referral channel has the highest completion rate of 20%, comparing to 9% for organic channel and 6% for paid channel. And also, 54% of the drivers are from Strark, 37% are from Berton and 9% are from Wrouver. The completion rates of cities are all between 9%-12%.
+
+Moreover, the age of vehicles are mostly between 0-6 years. In terms of age, 40% vehicles can be considered as new, and 26% can be considered as semi-new. However, in most states, vehicles made before 2004 cannot be used for Uber, hence there are still 7% of unacceptable vehicles. As to the completion rate, except for the unacceptable vehicles, the rates are all very close, varying from 43% to 47%. The top 3 popular makes are Toyota, Honda and Nissan, which are all famous for economy vehicles. The top 3 popular models are Camry, Civic and Crolla, belonging to Toyota, Honda and Toyota, respectively. 
+
+Also, the completion rates are close in terms of signup source, city, and vehicle conditions. The observable differences come in sighup channels and car brand tiers. 44% of drivers chose to sign up through paid channel but only 6% of then finished the first trip; however, 32% drivers who signed uo through referral channel have a completion rate of 20%. Similarly, vehicles from tier A and B only take up 6% of the total number, but both 44% completion rates. 94% of tier C drivers has a completion rate of 10%.
+
+The daily signup number flactuates between 300 to 600, but the number of first trip completion are more stable around 60. Also, first trips usually happen within a week of signup.
+
+# Analysis
+
+## Correlation Analysis
+
+### Signup Channel vs. Car Brand Tiers
+
+```{r warning=FALSE}
+tbl <- table(uber_v$signup_channel, uber_v$tier)
+tbl
+chisq.test(tbl, correct=F)
+```
+
+**[Interpretation]**
+
+Chi-Square test is used here to analyze the correlation between signup channel and car brand tiers. The p-value is close to 0.
+
+**[Implcation]**
+
+The null hypothesis is that groups of drivers categorized by signup channels and car brand tiers are independent. Since the p-value is less than the .05 significance level, we can reject the null hypothesis and say that these groups are correlated.
+
+## Interval Study
+
+### Signup Channel vs. Interval
+
+```{r fig.box.channel, echo=FALSE,fig.cap="\\label{fig:fig.box.channel}Boxplot of Signup Channel vs. Interval", fig.align="center", fig.pos="h"}
+uber_v.comp$time.diff <- as.numeric(uber_v.comp$time.diff)
+boxplot(time.diff ~ signup_channel, data = uber_v.comp, xlab = "Signup Channel", ylab = "Intervals")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.box.channel} the first and third quartiles of orgnic and paid channels are very close, which are 4 and 18, respectively. The averages are close as well, around 12, even though that of paid channel is slightly higher. Referred drivers have the lowest quartiles and average, and are close to those of the other two channels.
+
+**[Implication]**
+
+Drivers referred to Uber have the relatively shortest intervals, 1 or 2 days earlier than the other methods.
+
+### Car Tier vs. Interval
+
+```{r fig.box.tier, echo=FALSE,fig.cap="\\label{fig:fig.box.tier}Boxplot of Car Brand Tier vs. Interval", fig.align="center", fig.pos="h"}
+uber_v.comp$time.diff <- as.numeric(uber_v.comp$time.diff)
+boxplot(time.diff ~ tier, data = uber_v.comp, xlab = "Car Brand Tier", ylab = "Intervals")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.box.tier} shows that the drivers with tier S vehicles have the shortest average intervals about 7 days. Tier A, B and C drivers all have higher average intervals as well as quartiles. Their averages are around 11 days, and the interquartile range is about 10-12 days.
+
+**[Implication]**
+
+The sample size for tier S driver is 2, so that it may not represent the real situation. Tier C drivers has the longest average intervals comparing to A and B, however the difference is not large. 
+
+### All Variables
+
+```{r}
+# Create a variable for intervals in dataset Uber
+uber$time.diff <- uber$first_completed_date - uber$signup_date
+```
+
+```{r}
+uber$signup_date.d <- (as.POSIXct(uber$signup_date) - 
+                         as.POSIXct(as.Date("2016/01/01")))/86400
+uber$vehicle_added_date.d <- (as.POSIXct(uber$vehicle_added_date) - 
+                                as.POSIXct(as.Date("2016/01/01")))/86400
+uber$bgc_date.d <- (as.POSIXct(uber$bgc_date) - 
+                      as.POSIXct(as.Date("2016/01/01")))/86400
+
+uber$signup_v <- as.numeric(uber$vehicle_added_date.d - uber$signup_date.d)
+uber$signup_bgc <- as.numeric(uber$bgc_date.d - - uber$signup_date.d)
+uber$v_bgc <- as.numeric(uber$bgc_date.d - uber$vehicle_added_date.d)
+
+uber$tier <- as.factor(uber$tier)
+uber$new <- as.factor(uber$new)
+```
+
+```{r}
+# Create a new dataset with categories in numbers for correlation matrix
+uber.num <- uber
+uber.num$city_name <- as.numeric(factor(uber$city_name)) - 1
+uber.num$signup_os <- as.numeric(factor(uber$signup_os)) - 1
+uber.num$signup_channel <- as.numeric(factor(uber$signup_channel)) - 1
+uber.num$tier <- as.numeric(factor(uber$tier)) - 1
+uber.num$new <- as.numeric(uber$new)
+uber.num$signup_date.d <- as.numeric(uber$signup_date.d)
+uber.num$bgc_date.d <- as.numeric(uber$bgc_date.d)
+uber.num$vehicle_added_date.d <- as.numeric(uber$vehicle_added_date.d)
+```
+
+```{r}
+M <- cor(uber.num[c('city_name', 'signup_os', 'signup_channel', 'tier', 'new', 
+               'signup_date.d', 'bgc_date.d', 'vehicle_added_date.d',
+               'signup_v', 'signup_bgc', 'v_bgc')],
+         use="complete.obs")
+M
+```
+
+```{r fig.corr, echo=FALSE,fig.cap="\\label{fig:fig.corr}Correlation Map of All Variables", fig.align="center", fig.pos="h"}
+corrplot(M, method="number")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.corr} shows that the there are 2 noticeable correlations among time variables: signup date and background check date (0.61, moderate positive correlation), signup date and vehicle registration date (0.41, weak positive correlation), and background check date and vehicle registration date (0.79, strong positive correlation). Since there are many missing values in the dataset, the correlation matrix only used complete observations, which are the drivers that went through the signup to adding all the information of their vehicles.
+
+After adding features representing the invertals between signup, background check and vehicle regitration, there are some more correlations: vehicle registration date and the intervals between vehicle registration date and background check (-0.6, moderate negative correlation), intervals between signup and vehicle registration and intervals between vehicle registration and background check (-0.73, strong negative correlation), vehicle registration date and the intervals between signup and background check (0.7, strong positive correlation), signup date and the intervals between signup date and background check date (0.86, strong positive correlation), background check date and the intervals between signup date and background check date (0.93, strong positive correlation).
+
+**[Implication]**
+
+The result of the corrrelation plot shows the following things:\\
+1) Early vehicle registration date leads to longer intervals between vehicle registration date and background check.\\
+2) The longer the intervals between signup and vehicle registration are, the shorter the intervals between vehicle registration and background check are.\\
+3) Early vehicle regitration date leads to shorter intervals between signup and background check.\\
+4) Early signup date leads to shorter intervals between signup date and background check date.\\
+5) Early background check date leads to shorter intervals between signup date and background check date.\\
+
+### Summary
+
+The intervals between drivers from different signup channels do not vary much, and referral channel has the lowest average intervals. As to car brand tiers, tier C drivers has the longest average interval of about 11 days. If tier S is not taken into consideration duw to the small sample size of 2, tier A has the shortest average intervals of about 9 days. The correlation between intervals versus signup channel and car brand tier needs further analysis.
+
+## Prediction
+
+### First Trip Completion
+
+```{r}
+## Split the whole dataset into training and test
+set.seed(123) 
+smp_siz = floor(0.7*nrow(uber)) 
+train_ind = sample(seq_len(nrow(uber)), size = smp_siz)
+uber.train = uber[train_ind,] #creates the training dataset with row numbers stored in train_ind
+uber.test= uber[-train_ind,]
+
+uber.num <- na.roughfix(uber.num[c('city_name', 'signup_os', 'signup_channel', 'tier', 'new', 
+               'signup_date.d', 'bgc_date.d', 'vehicle_added_date.d',
+               'signup_v', 'signup_bgc', 'v_bgc', 'complete')])
+uber.num.train = uber.num[train_ind,] 
+uber.num.test= uber.num[-train_ind,]
+```
+
+#### Logistic Regression (With Dates)
+
+```{r}
+glm.uber <- glm(complete ~ city_name + signup_os + signup_channel + 
+                   signup_date.d + vehicle_added_date.d + new, 
+                 data = uber.train, family = "binomial")
+summary(glm.uber)
+```
+
+```{r fig.logic.roc, echo=FALSE,fig.cap="\\label{fig:fig.logic.roc}ROC of Logistic Regression for First Trip Completion (With Dates)", fig.align="center", fig.pos="h"}
+glm.test <- predict(glm.uber, uber.test, type="response")
+plot.roc(uber.test$complete, glm.test, print.auc = TRUE)
+```
+
+```{r table.glm, echo = FALSE, results='asis'}
+tbl.glm <- or_glm(data = uber.train, model = glm.uber, 
+       incr = list(signup_date.d = 1, vehicle_added_date.d = 1))
+
+kable(tbl.glm, caption = "\\label{tab:table.glm}Odds Ratios of Logistic Regression Results (With Dates)", format="latex", booktabs=TRUE) %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+**[Interpretation]**
+
+Baseline: The completion rate for drivers from Berton, sign up through unknow source and organic channel, and the vehicle condition is unacceptable.
+
+Formula: `complete` ~ `city_name` (Berton) + `signup_os` (Unknown) + `signup_channel` (Organic) + `new` (Unacceptable) + `signup_date.d` + `vehicle_added_date.d`
+
+The summary shows 6 important variables: city, signup channel, signup source, siangup date, vehicle added date,and vehicle condition. Increase in vehicle added date and change in the location compared to the baseline model can reduce the chances of finishing the first trip. Changes or increase in other variables compared to the baseline model can all increase the possibilities.
+
+Figure \ref{fig:fig.logic.roc} shows that the AUC score of logistic model is 0.861. 6 predictors are included in the model: city, signup source, signup channel, signup date, vehicle registration date and the vehicle condition. The variables that are not significant are removed from the model. 
+
+**[Implication]**
+
+According to Table \ref{tab:table.glm}, comparing to the baseline model:
+
+1) Compared to the baseline model with an unknown signup source, changing the signup source to any of the rest categories can easily double or even triple the chances.
+
+2) Compared to the baseline model with drivers from Berton, if the location of the drivers are other cities, the chanced will be lower. 
+
+3) As long as the condition of vehicle is not acceptable, the chances will increase by 50%-80%. 
+
+4) Later vehicle registration date will decrease the possibility by 15% per day; however, later signup date will increase the chances by 15% per day. 
+
+#### Logistic Regression (With Intervals)
+
+```{r}
+glm.uber.2 <- glm(complete ~ city_name + signup_os + signup_channel + 
+                   signup_v + signup_bgc + new , 
+                 data = uber.train, family = "binomial")
+summary(glm.uber.2)
+```
+
+```{r fig.logic.roc.2, echo=FALSE,fig.cap="\\label{fig:fig.logic.roc.2}ROC of Logistic Regression for First Trip Completion (With Intervals)", fig.align="center", fig.pos="h"}
+glm.test.2 <- predict(glm.uber.2, uber.test, type="response")
+plot.roc(uber.test$complete, glm.test.2, print.auc = TRUE)
+```
+
+```{r table.glm.2, echo = FALSE, results='asis'}
+tbl.glm.2 <- or_glm(data = uber.train, model = glm.uber.2, 
+       incr = list(signup_v = 1, signup_bgc = 1))
+
+kable(tbl.glm.2, caption = "\\label{tab:tbl.glm.2}Odds Ratios of Logistic Regression Results (With Intervals)", format="latex", booktabs=TRUE) %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+**[Interpretation]**
+
+Baseline: The completion rate for drivers from Berton, sign up through unknow source and organic channel, and the vehicle condition is unacceptable. 
+
+Formula: `complete` ~ `city_name` (Berton) + `signup_os` (Unknown) + `signup_channel` (Organic) + `new` (Unacceptable) + `signup_v` + `signup_bgc`
+
+The summary shows 6 important variables: city, signup channel, signup source, siangup-vehicle registration intervals, signup-background check intervals,and vehicle condition. Increase in siangup-vehicle registration intervals and signup-background check intervals can reduce the chances, and change in the location compared to the baseline model can reduce the chances of finishing the first trip. Changes or increase in other variables can all increase the possibilities.
+
+Figure \ref{fig:fig.logic.roc.2} shows that the AUC is 0.86, 0.01 lower compared to that of the previous logistic regression model with dates. 
+
+**[Implication]**
+
+Table \ref{tab:table.glm.2} shows similar results as Table \ref{tab:table.glm}. In addition, when the signup-vehicle regitration intervals and signup background check intervals increase by 1, the possibility will reduce 15% or 1%, respectively. 
+
+The results are similar to the results with logistic regression model with dates. As to the 2 new features, it shows that the when the signup-vehicle registration intervals and signup-background check intervals increase by 1 day, the chances will decrease by 20%.
+
+#### Summary - Logistic Regression
+
+Compare to the baseline model, any increase in `city`, `vehicle_added_date.d` (in model with dates), `signup_v` (in model with intervals) and `signup_bgc` (in model with intervals) can reduce the chances of first trip completion. On the contrary, the increases in other variables may help increase probabilities. Among all the variables, change the signup source from unknow to any other sources can cause the greatest increase the possibilities.
+
+#### Decision Tree (With Dates)
+
+```{r}
+dt.uber <- rpart(complete ~ city_name + signup_os + signup_channel + new +
+                   signup_date.d+ bgc_date.d + vehicle_added_date.d + tier, 
+                 data = uber.train, method = "class", 
+                 control = rpart.control(cp = 0.005))
+summary(dt.uber)
+```
+
+```{r fig.tree, echo=FALSE,fig.cap="\\label{fig:fig.tree}Decision Tree for First Trip Completion", fig.align="center", fig.pos="h"}
+rpart.plot(dt.uber)
+```
+
+```{r fig.tree.roc, echo=FALSE,fig.cap="\\label{fig:fig.tree.roc}ROC of Decision Tree for First Trip Completion", fig.align="center", fig.pos="h",warning=FALSE}
+dt.test <- predict(dt.uber, uber.test)
+uber.test$comp.pred <- dt.test[,2]
+plot.roc(uber.test$complete, uber.test$comp.pred, print.auc = TRUE)
+```
+
+```{r table.dt.1, echo = FALSE, results='asis'}
+tbl.dt <- rpart.rules(dt.uber)
+kable(tbl.dt, caption = "\\label{tab:table.dt.1}Rules of Decision Tree (With Dates)", 
+      format="latex", booktabs=TRUE) %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.tree} shows the plot of the decision tree. 34% drivers added vehicles after Feburary 3, but only have the possibility of 4% to finish the first trip. Moreover, 63% drivers added their vehicle and having a vehicle that belongs Tier C, they share a completion chance of 12%. The highest possibility comes from drivers who added the vehicle before Jan 17, 2016, with a vehicle that were not Tier C. But only 1% of the drivers belong to this category.
+
+The summary of the decision tree shows that the most important predictors are: vehicle added date, car brand tier, background check date and signup date. And the nodes are split according to these predictors. Figure \ref{fig:fig.tree.roc} shows the ROC curve. The AUC is 0.687, which is not very good. In fact, only 3 predictors were used in this decision tree. 
+
+Table \ref{tab:table.dt.1} shows the rule of this model.
+
+**[Implication]**
+
+Instead of signup date, signup source and other preditors that were considered important in the pre-analysis, this model chose 3 predictors out of 8. This could be the reason why the performance is not good.
+
+#### Decision Tree (With Dates, After Feature Selection)
+
+```{r}
+varImp(dt.uber)
+```
+
+Hence, `new` and `city_name` will be dropped.
+
+```{r results = "hide"}
+dt.uber.2 <- rpart(complete ~ signup_os + signup_channel +
+                    vehicle_added_date.d + signup_date.d + tier, 
+                 data = uber.train, method = "class",
+                 control = rpart.control(cp = 0.005))
+dt.uber.sum.2 <- summary(dt.uber.2)
+```
+
+```{r fig.tree.2, echo=FALSE,fig.cap="\\label{fig:fig.tree.2}Decision Tree (With Dates, After Feature Selection) for First Trip Completion", fig.align="center", fig.pos="h"}
+rpart.plot(dt.uber.2)
+```
+
+```{r fig.dt.roc.2, echo=FALSE,fig.cap="\\label{fig:fig.dt.roc.2}ROC of Decision Tree (With Dates, After Feature Selection) for First Trip Completion", fig.align="center", fig.pos="h"}
+dt.test.2 <- predict(dt.uber.2, uber.test)
+uber.test$comp.pred.2 <- dt.test.2[,2]
+plot.roc(uber.test$complete, uber.test$comp.pred.2, print.auc = TRUE)
+```
+
+```{r table.dt.2, echo = FALSE, results='asis'}
+tbl.dt.2 <- rpart.rules(dt.uber.2)
+kable(tbl.dt.2, caption = "\\label{tab:table.dt.2}Rules of Decision Tree (With Dates, After Feature Selection)", format="latex", booktabs=TRUE) %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+**[Interpretation]**
+
+After removing the two least important variables - city and vehicle conditions, Figure \ref{fig:fig.dt.roc.2} shows that the AUC score has slightly rised to 0.718. Figure \ref{fig:fig.tree.2} shows that there are 4 predictors included. 3 of them are the same as the previous tree, and the new one is. 28% of the drivers who added vehicles after February 3 were observed with only 3% of the chance of finishing the first trip. 48% of the drivers who signed up before Jan 17, 2017 and added vehicles before Jan 22, 2016, showed 9% chances to finish the first trip. 
+
+Table \ref{tab:table.dt.2} shows the rule of this model.
+
+**[Implication]**
+
+The two most important variables are signup date and vehicle registration date in Figure \ref{fig:fig.tree.2}, which means that the variables related to time are very important to . However, it is very difficult to explain the correlation between these factors and the possibility of completion. Therefore, in the next decision tree model, 
+
+#### Decision Tree (With Intervals)
+
+```{r results = "hide"}
+dt.uber.3 <- rpart(complete ~ signup_os + signup_channel + city_name +
+                    signup_bgc + signup_v + tier + v_bgc + new, 
+                 data = uber.train, method = "class",
+                 control = rpart.control(cp = 0.005))
+dt.uber.sum.3 <- summary(dt.uber.3)
+```
+
+```{r fig.tree.3, echo=FALSE,fig.cap="\\label{fig:fig.tree.3}Decision Tree (With Intervals) for First Trip Completion", fig.align="center", fig.pos="h"}
+rpart.plot(dt.uber.3)
+```
+
+```{r fig.dt.roc.3, echo=FALSE,fig.cap="\\label{fig:fig.dt.roc.3}ROC of Decision Tree (With Intervals) for First Trip Completion", fig.align="center", fig.pos="h"}
+dt.test.3 <- predict(dt.uber.3, uber.test)
+uber.test$comp.pred.3 <- dt.test.3[,2]
+plot.roc(uber.test$complete, uber.test$comp.pred.3, print.auc = TRUE)
+```
+
+```{r table.dt.3, echo = FALSE, results='asis'}
+tbl.dt.3 <- rpart.rules(dt.uber.3)
+kable(tbl.dt.3, caption = "\\label{tab:table.dt.3}Rules of Decision Tree (With Intervals)", 
+      format="latex", booktabs=TRUE) %>% 
+  kable_styling(latex_options="scale_down")
+```
+
+```{r}
+varImp(dt.uber.3)
+```
+
+
+**[Interpretation]**
+
+Figure \ref{fig:fig.tree.3} shows the decision tree with intervals. The most important variables are signup-vehicle registration intervals, vehicle registration-background check intervals, tiers, signup-background check intervals, sign up channel and signup source. There is only 4% chances for 23% of the drivers who had signup-vehicle registration intervals longer than 16 days. And 3% chances for 51% drivers whose signup-vehicle registration interval is greater than 5 days with a signup channel of either organic and paid, and a signup-background check interval greater than 9 days. The highest possibility, which is 71%, belongs to the drivers whose signup-vehicle registration interval is less than 9 days, and vehicles are not Tier C nor S. 
+
+Figure \ref{fig:fig.dt.roc.3} shows that the AUC is 0.834, indicating that the performance is much better than the previous ones. 
+
+Table \ref{tab:table.dt.3} shows the rule of this model.
+
+**[Implication]**
+
+Intuitively, the features selected for splitting nodes in this tree make much more sense than the previous trees. The parent node is based on signup-vehicle registration intervals, and Figure \ref{fig:fig.tree.3} shows that generally, the shorter the intervals are, the greater the chances that the drivers would finish the first trip. Another important information is that drivers who signed up thourgh referral channel have a better chance of finishing the first trip than others. 
+
+#### Summary - Decision Tree
+
+According to the bariable importance tables, the most important variables for classification are vehicle added date car brand tier for the desicion tree model with dates, and signup channel, signup-vehicle registration intervals, car brand tier and vehicle registration-background check intervals. One possible reason is that, since the missing values are still included in the model, as long as the vehicle registration and background check dates exist, they may represent that those drivers are more determined to finish the first trip.
+
+#### Random Forest (With Dates)
+
+```{r}
+set.seed(123)
+rf.uber.1 <- randomForest(factor(complete) ~ city_name + signup_os + signup_channel + 
+                   signup_date.d + bgc_date.d + vehicle_added_date.d + tier + new, 
+                 data = uber.train, na.action = na.omit)
+rf.uber.1
+```
+
+```{r}
+importance(rf.uber.1)
+```
+
+```{r}
+rf.test <- predict(rf.uber.1, uber.test, type="prob")
+plot.roc(uber.test$complete, rf.test[,2], print.auc = TRUE)
+```
+
+
+**[Interpretation]**
+
+The summary shows that the out-of-bag estimate of error rate is 22.3%. The classification error rate for class 0 (no completion) is 24.31%, and for class 1 (completion) is 19.8%. The most important predictor is vehicle added date, background check date and sigup date. 
+
+**[Implication]**
+
+The top 3 important predictors are all related to time.
+
+#### Random Forest (With Dates, Encoded)
+
+```{r warning = FALSE}
+set.seed(123)
+rf.uber.2 <- randomForest(factor(complete) ~ city_name + signup_os + signup_channel + 
+                   signup_date.d + bgc_date.d + vehicle_added_date.d + tier + new, 
+                 data = uber.num.train, na.action = na.omit)
+rf.uber.2
+```
+
+```{r fig.rf.roc.2, echo=FALSE,fig.cap="\\label{fig:fig.rf.roc.2}ROC of Random Forest (With Dates, Encoded) for First Trip Completion", fig.align="center", fig.pos="h"}
+rf.pred.2 <- predict(rf.uber.2, uber.num.test, type = "prob")
+plot.roc(uber.num.test$complete, rf.pred.2[,2], print.auc = TRUE)
+```
+
+```{r}
+importance(rf.uber.2)
+```
+
+**[Interpretation]**
+
+The random forest for classification generated 500 trees. The out-of-bag error rate is 5.97%, and classification error for class 0 (no completion) is 3.35%, for class 1 (completion) is 26.9%. Figure \ref{fig:fig.rf.roc.2} shows that the AUC is 0.96, which is very satisfying. The top 3 important predictors are vehicle registration date, background check date and vehicle condition.
+
+**[Implication]**
+
+The encoded variables has two main changes: 1) The missing values are roughly fixed. 2) All the variables are encoded as numbers. Then the random forest model has reached the highest AUC so far. Vehicle condition becomes one of the most important variables instead of background check date.
+
+#### Random Forest (With Intervals)
+
+```{r}
+set.seed(123)
+rf.uber.3 <- randomForest(as.factor(complete) ~ city_name + signup_os + 
+                            signup_channel + v_bgc + signup_bgc + signup_v + tier + new, 
+                 data = uber.train, na.action = na.omit)
+rf.uber.3
+```
+
+```{r}
+importance(rf.uber.3)
+```
+
+```{r}
+rf.test.3 <- predict(rf.uber.3, uber.test, type="prob")
+plot.roc(uber.test$complete, rf.test.3[,2], print.auc = TRUE)
+```
+
+
+**[Interpretation]**
+
+The random forest for classification generated 500 trees. The out-of-bag error rate is 22.36%, and classification error for class 0 is 24.63%, for class 1 is 20.26%. The top 3 important variables are signup-vehicle registration intervals, vehicle-background check intervals and signup-background check intervals.
+
+**[Implication]**
+
+Time-related factors are still the most important ones. 
+
+#### Random Forest (With Intervals, Encoded)
+
+```{r}
+set.seed(123)
+rf.uber.4 <- randomForest(as.factor(complete) ~ city_name + signup_os + 
+                            signup_channel + v_bgc + signup_bgc + signup_v + tier + new, 
+                 data = uber.num.train, na.action = na.omit)
+rf.uber.4
+```
+
+```{r fig.rf.roc.4, echo=FALSE,fig.cap="\\label{fig:fig.rf.roc.4}ROC of Random Forest (With Intervals, Encoded) for First Trip Completion", fig.align="center", fig.pos="h"}
+rf.pred.4 <- predict(rf.uber.4, uber.num.test, type = "prob")
+plot.roc(uber.num.test$complete, rf.pred.4[,2], print.auc = TRUE)
+```
+
+```{r}
+importance(rf.uber.4)
+```
+
+The top 3 important variables are signup-vehicle registration intervals, vehicle-background check intervals and signup-background check intervals.
+
+**[Interpretation]**
+
+The random forest for classification generated 500 trees. The out-of-bag error rate is 5.87%, and classification error for class 0 is 3.40%, for class 1 is 25.63%. Figure \ref{fig:fig.rf.roc.4} shows that the AUC is 0.956, which is good. The top 3 most important predictors are 
+
+**[Implication]**
+
+The reason that this AUC is slightly less that the reandom forest model with dates may be the randomness feature of the model. 
+
+#### Summary - Random Forest
+
+The biggest difference with the random forest models are 1) the missing values are ommited or 2) the categorical variables are encoded, hence the missing values can be roughly fixed with mediums. According to the variable importance tables, in models with dates, the most important variable is the vehicle registration date; in models with intervals, the most important variables are the intervals between signup and vehicle registration, and the intervals between vehicle registration and background check.
+
+#### Neural Network (With Dates)
+
+```{r results = "hide"}
+net.uber <- nnet(complete ~ city_name + signup_os + signup_channel + 
+                   signup_date.d + vehicle_added_date.d + new + tier, 
+                 data = uber.train, size = 2, decay = 0.05, maxit = 2000)
+```
+
+```{r}
+summary(net.uber)
+```
+
+```{r fig.net.roc, echo=FALSE,fig.cap="\\label{fig:fig.net.roc}ROC of Neural Network for First Trip Completion", fig.align="center", fig.pos="h", warning = FALSE}
+net.test <- predict(net.uber, uber.test)
+plot.roc(uber.test$complete, net.test, print.auc = TRUE)
+```
+
+```{r fig.net, echo=FALSE,fig.cap="\\label{fig:fig.net}Neural Network (With Dates) for First Trip Completion", fig.align="center", fig.pos="h", warning = FALSE}
+# A black line represents a positive weight
+# A gray line represents a negative weight
+plotnet(net.uber, cex_val = 0.3, circle_cex = 2, 
+        rel_rsc = c(1, 7), max_sp = T)
+```
+
+**[Interpretation]**
+
+Baseline: The completion rate for drivers from Berton, sign up through unknow source and organic channel, and the vehicle condition is unacceptable.
+
+Formula: `complete` ~ `city_name` (Berton) + `signup_os` (Unknown) + `signup_channel` (Organic) + `new` (Unacceptable) + `signup_date.d` + `vehicle_added_date.d`
+
+Figure \ref{fig:fig.net.roc} the AUC score is 0.860. It is a 15-2-1 network with 35 weights. Figure \ref{fig:fig.net} shows that compared to the baseline model, most of the changes will have negative impact on the possibilities. The strongest negative effect comes from signup date.
+
+**[Implication]**
+
+The AUC score of Neural Network is close to that of logistic regression even with out feature selection.
+
+#### Neural Network (With Intervals)
+
+```{r results = "hide"}
+net.uber.2 <- nnet(complete ~ city_name + signup_os + signup_channel + 
+                   signup_v + signup_bgc + v_bgc + new + tier, 
+                 data = uber.train, size = 2, decay = 0.05, maxit = 2000)
+```
+
+```{r}
+net.uber.2 
+```
+
+```{r}
+summary(net.uber.2)
+```
+
+```{r fig.net.roc.2, echo=FALSE,fig.cap="\\label{fig:fig.net.roc}ROC of Neural Network (With Intervals) for First Trip Completion", fig.align="center", fig.pos="h", warning = FALSE}
+net.test.2 <- predict(net.uber.2, uber.test)
+plot.roc(uber.test$complete, net.test.2, print.auc = TRUE)
+```
+
+```{r fig.net.2, echo=FALSE,fig.cap="\\label{fig:fig.net.2}ROC of Neural Network (With Intervals) for First Trip Completion", fig.align="center", fig.pos="h", warning = FALSE}
+# A black line represents a positive weight
+# A gray line represents a negative weight
+plotnet(net.uber.2, cex_val = 0.3, circle_cex = 2, 
+        rel_rsc = c(1, 7), max_sp = T)
+```
+
+**[Interpretaition]**
+
+Baseline: The completion rate for drivers from Berton, sign up through unknow source and organic channel, and the vehicle condition is unacceptable. 
+
+Formula: `complete` ~ `city_name` (Berton) + `signup_os` (Unknown) + `signup_channel` (Organic) + `new` (Unacceptable) + `signup_v` + `signup_bgc`
+
+Figure \ref{fig:fig.net.roc.2} shows that the AUC score is 0.856. It is a a 19-2-1 network with 43 weights. Figure \ref{fig:fig.net.2} shows the plot of this model and nearly half of the changes can cause positive changed to the possibilities. Although influece of the changes are mixed, the strongest comes from signup sources and car brand tiers.
+
+**[Implication]**
+
+Considering the new features, only signup-vehicle registration interval has positive impacts on both hidden layers, which means that the longer signup-vehicle registration interval actually helps to increase the possibility of first trip completion.
+
+#### Summary - Neural Network
+
+The three most important variables from the outcomes of both models are: car brand tiers, signup sources and vehicle added date. 
+
+#### Summary - All Models
+
+The most important independent variables vary form model to model. However, the best model has reached a ROC of 0.96. Since most of the predictors have missing values, fixing problem can really help improve the performance of the models. 
+
+### Signup-Vehicle Registration Interval
+
+```{r}
+length(uber.train$signup_v[!is.na(uber.test$signup_v)])
+length(uber.test$signup_v[!is.na(uber.test$signup_v)])
+```
+
+In this section, only records with vehicle registration dates will be used. Therefore, there are 9106 records in the traning set, and 3912 records in the test set.
+
+#### Linear Regression
+
+```{r}
+lm.uber <- lm(signup_v ~ city_name + signup_os + signup_channel + 
+                signup_date.d + new,
+              data = uber.train, subset = !is.na(signup_v))
+summary(lm.uber)
+```
+
+```{r fig.lm, echo=FALSE,fig.cap="\\label{fig:fig.lm}Linear Regression, Predicted vs. Actual", fig.align="center", fig.pos="h", warning = FALSE}
+lm.test <- predict(lm.uber, uber.test[!is.na(uber.test$signup_v),]
+                   , interval = 'confidence')
+plot(lm.test[ ,1] ~ uber.test$signup_v[!is.na(uber.test$signup_v)], pch = ".",
+     ylab = "Precition Results", 
+     xlab = "Intervals Between Signup And Vehicle Registration (Days)")
+abline(a = 0, b = 1, col="red", lwd = 2)
+```
+
+```{r}
+RMSE(lm.test, uber.test$signup_v[!is.na(uber.test$signup_v)])
+```
+
+**[Interpretation]**
+
+The summary shows that the R-squared is 0.03958, which means that only 4% of the variance can be explained by the model. The RMSE is close to 13.8309.
+
+**[Implication]**
+
+Since most of the predictors in the model are categorial variables, linear regression may not be the best way for prediction. 
+
+#### Linear Regression (Roughly Fixed, Encoded)
+
+```{r}
+lm.uber.2 <- lm(signup_v ~ signup_os + signup_channel + 
+                   signup_date.d + tier + new + city_name,
+              data = uber.num.train, subset = !is.na(signup_v))
+summary(lm.uber.2)
+```
+
+```{r fig.lm.2, echo=FALSE,fig.cap="\\label{fig:fig.lm.2}Linear Regression (Roughly Fixed, Encoded), Predicted vs. Actual", fig.align="center", fig.pos="h", warning = FALSE}
+lm.test.2 <- predict(lm.uber.2, uber.num.test[!is.na(uber.num.test$signup_v),], 
+                     interval = 'confidence')
+plot(lm.test.2[ ,1] ~ uber.num.test$signup_v[!is.na(uber.num.test$signup_v)], 
+     pch = ".",
+     ylab = "Precition Results", 
+     xlab = "Intervals Between Signup And Vehicle Registration (Days)")
+abline(a = 0, b = 1, col="red", lwd = 2)
+```
+
+```{r}
+RMSE(lm.test.2, uber.num.test$signup_v[!is.na(uber.num.test$signup_v)])
+```
+
+**[Interpretation]**
+
+R-squared is 0.02376, meaning that only 2.3% of the variance is explained by this model. 
+
+**[Implication]**
+
+Both linear regression models have failed to fit the dataset and perform prediction. 
+
+#### Neural Network
+
+```{r}
+set.seed(123)
+net.uber.interval <- nnet(signup_v ~ signup_os + signup_channel + 
+                   signup_date.d + tier + new + city_name,
+              data = uber.train, size = 2, subset = !is.na(uber.test$signup_v))
+summary(net.uber.interval)
+```
+
+```{r}
+net.interval.test <- predict(net.uber.interval, uber.test[!is.na(uber.test$signup_v),], 
+                     interval = 'confidence')
+```
+
+```{r}
+RMSE(net.interval.test, uber.test$signup_v[!is.na(uber.test$signup_v)])
+```
+
+#### Neural Network (Encoded)
+
+```{r}
+set.seed(123)
+net.uber.interval.2 <- nnet(signup_v ~ signup_os + signup_channel + 
+                   signup_date.d + tier + new + city_name,
+              data = uber.num.train, size = 2, subset = !is.na(uber.test$signup_v))
+summary(net.uber.interval.2)
+```
+
+```{r}
+net.interval.test.2 <- predict(net.uber.interval.2,
+                               uber.num.test[!is.na(uber.num.test$signup_v),], 
+                     interval = 'confidence')
+```
+
+```{r}
+RMSE(net.interval.test.2, uber.num.test$signup_v[!is.na(uber.num.test$signup_v)])
+```
+
+## Cross-Validation 
+
+### Logistic Regression (With Dates)
+
+```{r}
+set.seed(123)
+form <- "complete ~ city_name + signup_os + signup_channel + signup_date.d + vehicle_added_date.d + new"
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- glm(form , train, family = "binomial")
+ tmp.predict <- predict(tmp.model, newdata = test, type = "response")
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Logistic Regression (With Intervals)
+
+```{r}
+set.seed(123)
+form <- "complete ~ city_name + signup_os + signup_channel + signup_v + signup_bgc + new"
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- glm(form , train, family = "binomial")
+ tmp.predict <- predict(tmp.model, newdata = test, type = "response")
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Decision Tree (With Dates)
+
+```{r}
+set.seed(123)
+form <- "complete ~ city_name + signup_os + signup_channel + new + signup_date.d+ bgc_date.d + vehicle_added_date.d + tier"
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- rpart(form , train, method = "class")
+ tmp.predict <- predict(tmp.model, newdata = test, type = "class")
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Decision Tree (With Dates, After Feature Selection)
+
+```{r}
+set.seed(123)
+form <- "complete ~ signup_os + signup_channel + vehicle_added_date.d + signup_date.d + tier"
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- rpart(form , train, method = "class")
+ tmp.predict <- predict(tmp.model, newdata = test, type = "class")
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Decision Tree (With Intervals)
+
+```{r}
+set.seed(123)
+form <- "complete ~ signup_os + signup_channel + city_name + signup_bgc + signup_v + tier + v_bgc + new"
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- rpart(form , train, method = "class")
+ tmp.predict <- predict(tmp.model, newdata = test, type = "class")
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Random Forest (With Dates)
+
+```{r}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- randomForest(factor(complete) ~ city_name + signup_os + 
+                             signup_channel + signup_date.d + bgc_date.d + 
+                             vehicle_added_date.d + tier + new, 
+                           train, na.action = na.omit)
+ tmp.predict <- predict(tmp.model, newdata = test, type="prob")
+ tmp.predict.class <- rep(0, length(tmp.predict[,2]))
+ tmp.predict.class[tmp.predict[,2] > 0.5] <- 1
+ conf.mat <- table(test$complete, tmp.predict.class)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Random Forest (With Dates, Encoded)
+
+```{r}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber.num)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- randomForest(factor(complete) ~ city_name + signup_os + 
+                             signup_channel + signup_date.d + bgc_date.d + 
+                             vehicle_added_date.d + tier + new, 
+                           train, na.action = na.omit)
+ tmp.predict <- predict(tmp.model, newdata = test, type="prob")
+ tmp.predict.class <- rep(0, length(tmp.predict[,2]))
+ tmp.predict.class[tmp.predict[,2] > 0.5] <- 1
+ conf.mat <- table(test$complete, tmp.predict.class)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Random Forest (With Intervals)
+
+```{r}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- randomForest(as.factor(complete) ~ city_name + signup_os + 
+                            signup_channel + v_bgc + signup_bgc + 
+                             signup_v + tier + new, 
+                           train, na.action = na.omit)
+ tmp.predict <- predict(tmp.model, newdata = test, type="prob")
+ tmp.predict.class <- rep(0, length(tmp.predict[,2]))
+ tmp.predict.class[tmp.predict[,2] > 0.5] <- 1
+ conf.mat <- table(test$complete, tmp.predict.class)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Random Forest (With Intervals, Encoded)
+
+```{r}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber.num)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- randomForest(as.factor(complete) ~ city_name + signup_os + 
+                            signup_channel + v_bgc + signup_bgc + 
+                             signup_v + tier + new, 
+                           train, na.action = na.omit)
+ tmp.predict <- predict(tmp.model, newdata = test, type="prob")
+ tmp.predict.class <- rep(0, length(tmp.predict[,2]))
+ tmp.predict.class[tmp.predict[,2] > 0.5] <- 1
+ conf.mat <- table(test$complete, tmp.predict.class)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+```
+
+### Neural Network (With Dates)
+
+```{r results="hide"}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- nnet(complete ~ city_name + signup_os + signup_channel + 
+                   signup_date.d + vehicle_added_date.d + new + tier, 
+                 data = train, size = 2, decay = 0.05, maxit = 2000)
+ tmp.predict <- predict(tmp.model, newdata = test)
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+```{r}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Neural Network (With Intervals)
+
+```{r results="hide"}
+set.seed(123)
+folds <- split(uber, cut(sample(1:nrow(uber)),10))
+errs <- rep(NA, length(folds))
+
+for (i in 1:length(folds)) {
+ test <- ldply(folds[i], data.frame)
+ train <- ldply(folds[-i], data.frame)
+ tmp.model <- nnet(complete ~ city_name + signup_os + signup_channel + 
+                   signup_v + signup_bgc + v_bgc + new + tier, 
+                 data = train, size = 2, decay = 0.05, maxit = 2000)
+ tmp.predict <- predict(tmp.model, newdata = test)
+ conf.mat <- table(test$complete, tmp.predict)
+ errs[i] <- 1-sum(diag(conf.mat))/sum(conf.mat)
+}
+```
+
+```{r}
+print(sprintf("Average error using k-fold cross-validation: %.3f percent", 100*mean(errs)))
+```
+
+### Summary
+
+Table \ref{tab:modcomp} shows that there are 4 models with very high AUC's and low average cross-validation errors. The possible reason is that the result of predictors with any missing values is likely to be NA, and wil be considered as 0 since the posibility is considered under the threshold in ROC curve. In the meantime, the `completion` column of the rows with missing valuesare all 0, so that the AUC score is high. However, in cross validation, only prediction results with a probability above 0.5 are considered as 1 (finished the first trip), hence the average cross validation errors are much higher.
+
+According to the pre-analysis and prediction models above, the most important variables for first trip completion prediction are signup source car condition and vehicle added date (or signup-vehicle registration interval). Compare to drivers signed up from unknown sources, drivers signup through mobile deviced have 2.5 times the chances of finishing the first trip, and those from computers have 3.7 times the chance of finishing the first trip. Also, compared to unacceptable condition vehicle drivers, the drivers with cars with any other conditions all have 1.5-1.8 times of chanced of finishing the first trip. Even though car brand tier is not an important variable in logistic regression models, it is important in decision tree models. As long as the vehicle are from A, B, S brands, the drivers are more likely to finish the first trip. In random forest models, the signup date or signup-vehicle registration interval play the most important roles in unencoded and encoded models, respectively.
+
+
+
+\begin{table}
+\centering
+\caption{Model Comparison For First Trip Completion \label{tab:modcomp}}
+\begin{tabular}{|l|l|l|} 
+\hline
+Model & ROC AUC & Average 10-Fold Cross Validation Error \\ 
+\hline
+Logistic Regression (With Dates)                    & 0.861 & 99.924\% \\
+Logistic Regression (With Intervals)                & 0.860 & 99.922\% \\
+Decision Tree (With Dates)                          & 0.687 & 10.146\% \\
+Decision Tree (With Dates, After Feature Selection) & 0.718 & 9.217\% \\
+Decision Tree (With Intervals)                      & 0.834 & 9.371\% \\
+Random Forest (With Dates)                          & 0.841 & 5.839\% \\
+Random Forest (With Dates, Encoded)                 & 0.960 & 5.839\% \\
+Random Forest (With Intervals)                      & 0.848 & 5.709\% \\
+Random Forest (With Intervals, Encoded)             & 0.956 & 5.709\% \\
+Neural Network (With Dates)                         & 0.860 & 99.924\% \\
+Neural Network (With Intervals)                     & 0.858 & 99.922\% \\
+\hline
+\end{tabular}
+\end{table}
+
+# Problems
+
+## 1. What fraction of the driver signups took a first trip?
+
+```{r}
+sum(uber$complete == 1)/length(uber$id)
+```
+
+Only 11.22% of the drivers who signed up finished their first trips.
+
+## 2. Build a predictive model to help Uber determin whether or not a driver signup will driving. How valid is the model?
+
+Random forest model with dates and encoded features, with missing values roughly fixed.
+
+## 3. Briefly discuss how Uber might leverage the insights gained from the model to generate more first trips?
+
+1) Uber should come up with more promotions to draw new drivers to signup through computers since the drivers signed up from computer sources are 1.5 times more likely to finish their first trip than drivers who signed up from mobile devices.
+
+2) Uber should prohibit the cars made before 2004 for registration. The owners of these vehicles have a relatively low posibility of finishing the first trip and the vehicles may not be as safe as well.
+
+3) The best channel to attact new drivers is referral. Cut the money for paid promotions, and invest more on referral bonus.
+
+# Appendix A: Data Dictionary
+
+\begin{table}
+\centering
+\caption{Data Description}
+\begin{tabular}{|l|l|} 
+\hline
+Variable Name          & Description                           \\ 
+\hline
+id                     & The unique ID of the driver.          \\
+city\_name             & The city where the driver is at.      \\
+signup\_os             & Signup source/device.                 \\
+signup\_channel        & Signup channel.                       \\
+signup\_date           & Signup date.                          \\
+bgc\_date              & Background check date.                \\
+vehicle\_added\_date   & Vehicle registration date.            \\
+vehicle\_make          & The make of the registered vehicle.   \\
+vehicle\_model         & The model of the registered vehicle.  \\
+vehicle\_year          & In which year the vehicle was made.   \\
+first\_completed\_date & When was the first trip completed.    \\
+new (new)              & The indicator of the condition of the vehicle. (4 -> 0: Newest to Oldest)\\
+tier (new)             & The tier of the car brand. (From luxury to economy: S, A, B, C)  \\
+time\.diff            & The interval between signup and first trip.\\
+signup\_date.d (new) & Intervals between the signup date and 1/1/2016 in days.\\
+bgc\_date\_date.d (new) & Intervals between the signup date and 1/1/2016 in days.\\
+vehicle\_added\_date.d (new) & Intervals between the signup date and 1/1/2016 in days.\\
+signup\_v (new) & Intervals between the signup date and vehicle added date.\\
+signup\_bgc (new) & Intervals between the signup date and background check date.\\
+v\_bgc (new) & Intervals between vehicle added date and background check date.\\
+\hline
+\end{tabular}
+\end{table}
